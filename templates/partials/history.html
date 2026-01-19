@@ -1,0 +1,34 @@
+<!-- History Panel Partial -->
+
+{% if after_delete is defined and after_delete %}
+<script>
+    htmx.trigger(document.body, 'configUpdate');
+</script>
+{% endif %}
+
+{% if entries %}
+<div class="history-list">
+    {% for entry in entries %}
+    <div class="history-entry {% if loop.index is odd %}odd{% endif %}">
+        <div class="history-main">
+            <div class="history-time">{{ entry.time_str }}</div>
+            <div class="history-config">{{ entry.config }}</div>
+            {% if entry.comment %}
+            <div class="history-comment">"{{ entry.comment }}"</div>
+            {% endif %}
+        </div>
+        <button 
+            class="history-delete"
+            hx-delete="/entry/{{ entry.iso }}"
+            hx-target="#history-content"
+            hx-swap="innerHTML"
+            hx-confirm="Delete this entry?"
+        >
+            🗑
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="history-empty">No recent entries</p>
+{% endif %}

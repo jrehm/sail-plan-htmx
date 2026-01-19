@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>{{ BOAT_NAME }} Sail Plan</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <span class="header-title">{{ BOAT_NAME.upper() }}</span>
+        <span class="header-time" hx-get="/time" hx-trigger="every 30s" hx-swap="innerHTML">{{ current_time }}</span>
+    </header>
+
+    <main>
+        <!-- Sail Selector (HTMX-swappable region) -->
+        <div id="sail-selector" hx-get="/config" hx-trigger="configUpdate from:body" hx-swap="innerHTML">
+            {% include "partials/sail_selector.html" %}
+        </div>
+
+        <!-- Hidden input for backdate state (outside #sail-selector to survive HTMX swaps) -->
+        <input type="hidden" name="backdate_enabled" id="backdate-enabled" value="false" form="sail-form">
+
+        <!-- Comment & Options -->
+        <div class="options-section">
+            <details class="options-details">
+                <summary class="options-summary">Options</summary>
+                <div class="options-content">
+                    <div class="form-group">
+                        <label for="comment">Note</label>
+                        <textarea 
+                            id="comment" 
+                            name="comment" 
+                            form="sail-form"
+                            placeholder="Conditions, reason for change..."
+                            rows="2"
+                        ></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="backdate-toggle" onchange="toggleBackdate()">
+                            Backdate entry
+                        </label>
+                    </div>
+                    
+                    <div id="backdate-fields" class="backdate-fields hidden">
+                        <div class="backdate-row">
+                            <input type="date" id="backdate-date" name="backdate_date" form="sail-form">
+                            <select id="backdate-hour" name="backdate_hour" form="sail-form">
+                                {% for h in range(24) %}
+                                <option value="{{ h }}">{{ "%02d"|format(h) }}h</option>
+                                {% endfor %}
+                            </select>
+                            <select id="backdate-minute" name="backdate_minute" form="sail-form">
+                                {% for m in range(0, 60, 5) %}
+                                <option value="{{ m }}">{{ "%02d"|format(m) }}m</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <!-- History (slide-out panel) -->
+        <button class="history-toggle" onclick="toggleHistory()">History ▶</button>
+        <aside id="history-panel" class="history-panel">
+            <div class="history-header">
+                <h2>History</h2>
+                <button class="history-close" onclick="toggleHistory()">✕</button>
+            </div>
+            <div 
+                id="history-content"
+                hx-get="/history" 
+                hx-trigger="load, historyUpdate from:body"
+                hx-swap="innerHTML"
+            >
+                Loading...
+            </div>
+        </aside>
+    </main>
+
+    <!-- Version footer -->
+    <footer class="version">v{{ VERSION }}</footer>
+
+    <script>
+        function toggleHistory() {
+            document.getElementById('history-panel').classList.toggle('open');
+        }
+        
+        function toggleBackdate() {
+            const enabled = document.getElementById('backdate-toggle').checked;
+            document.getElementById('backdate-fields').classList.toggle('hidden', !enabled);
+            document.getElementById('backdate-enabled').value = enabled ? 'true' : 'false';
+            
+            // Set default date/time to now if enabling
+            if (enabled) {
+                const now = new Date();
+                document.getElementById('backdate-date').value = now.toISOString().split('T')[0];
+                document.getElementById('backdate-hour').value = now.getHours();
+                const minute = Math.floor(now.getMinutes() / 5) * 5;
+                document.getElementById('backdate-minute').value = minute;
+            }
+        }
+        
+        // Haptic feedback on button press (Android)
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('.sail-btn') && navigator.vibrate) {
+                navigator.vibrate(10);
+            }
+        });
+
+        // Track if notes field has content for unsaved state
+        function updateUnsavedState() {
+            const comment = document.getElementById('comment');
+            const banner = document.querySelector('.state-banner');
+            const updateBtn = document.querySelector('.update-btn');
+            const badge = banner?.querySelector('.pending-badge');
+
+            if (!comment || !banner || !updateBtn) return;
+
+            const hasNotes = comment.value.trim().length > 0;
+            const hasSailChanges = banner.classList.contains('has-changes');
+
+            if (hasNotes && !hasSailChanges) {
+                // Notes added but no sail changes - show unsaved
+                banner.classList.add('has-changes');
+                updateBtn.classList.add('active');
+                updateBtn.disabled = false;
+                if (!badge) {
+                    const newBadge = document.createElement('span');
+                    newBadge.className = 'pending-badge';
+                    newBadge.textContent = 'unsaved';
+                    banner.appendChild(newBadge);
+                }
+            } else if (!hasNotes && !hasSailChanges) {
+                // No notes and no sail changes - check if badge was added by JS
+                // Only remove if the server didn't set has-changes
+                const serverHasChanges = updateBtn.classList.contains('active');
+                if (!serverHasChanges) {
+                    banner.classList.remove('has-changes');
+                    updateBtn.classList.remove('active');
+                    updateBtn.disabled = true;
+                    badge?.remove();
+                }
+            }
+        }
+
+        // Listen for input on comment field
+        document.getElementById('comment')?.addEventListener('input', updateUnsavedState);
+
+        // Re-check after HTMX settles (fires after inline scripts run)
+        document.body.addEventListener('htmx:afterSettle', (e) => {
+            if (e.detail.target.id === 'sail-selector') {
+                updateUnsavedState();
+            }
+        });
+    </script>
+</body>
+</html>

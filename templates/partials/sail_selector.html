@@ -1,0 +1,125 @@
+<!-- Sail Selector Partial - swapped by HTMX on sail changes -->
+
+{# Use pending if available, otherwise fall back to config from parent template #}
+{% set current = pending if pending is defined else config %}
+{% set committed_config = committed if committed is defined else config %}
+{% set show_changes = has_changes if has_changes is defined else false %}
+
+<!-- Hidden form to track pending state and submit on save -->
+<form id="sail-form" hx-post="/save" hx-target="#sail-selector" hx-swap="innerHTML">
+    <input type="hidden" name="pending_main" id="pending-main" value="{{ current.main }}">
+    <input type="hidden" name="pending_headsail" id="pending-headsail" value="{{ current.headsail }}">
+    <input type="hidden" name="pending_downwind" id="pending-downwind" value="{{ current.downwind }}">
+    <input type="hidden" name="pending_staysail" id="pending-staysail" value="{{ 'true' if current.staysail_mode else 'false' }}">
+</form>
+
+<!-- Current Status + Update Button -->
+<h2 class="section-label">CURRENT STATUS</h2>
+<div class="status-row">
+    <div class="state-banner {% if show_changes %}has-changes{% endif %}">
+        {{ summary if summary is defined else format_config_summary(current) }}
+        {% if show_changes %}
+        <span class="pending-badge">unsaved</span>
+        {% endif %}
+    </div>
+    <button 
+        type="submit" 
+        form="sail-form" 
+        class="update-btn {% if show_changes %}active{% endif %}"
+        {% if not show_changes %}disabled{% endif %}
+    >
+        UPDATE
+    </button>
+</div>
+
+{% if save_success is defined %}
+    {% if save_success %}
+<div class="toast" id="save-toast">Saved!</div>
+<script>
+    setTimeout(() => document.getElementById('save-toast')?.remove(), 2000);
+    // Clear comment field after successful save
+    const commentField = document.getElementById('comment');
+    if (commentField) commentField.value = '';
+</script>
+    {% else %}
+<div class="toast error" id="save-toast">Save failed!</div>
+<script>
+    setTimeout(() => document.getElementById('save-toast')?.remove(), 3000);
+</script>
+    {% endif %}
+{% endif %}
+
+<!-- Main Sail -->
+<section class="sail-section sail-section--main">
+    <h2 class="section-label">MAIN</h2>
+    <div class="sail-grid">
+        {% for sail in MAIN_STATES %}
+        <button 
+            type="button"
+            class="sail-btn {% if current.main == sail %}selected{% endif %}"
+            hx-post="/sail/main/{{ sail }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ SAIL_DISPLAY.get(sail, sail) }}
+        </button>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Headsail -->
+<section class="sail-section sail-section--headsail">
+    <h2 class="section-label">HEADSAIL</h2>
+    <div class="sail-grid">
+        {% for sail in HEADSAILS %}
+        <button 
+            type="button"
+            class="sail-btn {% if current.headsail == sail %}selected{% endif %}"
+            hx-post="/sail/headsail/{{ sail }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ SAIL_DISPLAY.get(sail, sail) }}
+        </button>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Downwind -->
+<section class="sail-section sail-section--downwind">
+    <h2 class="section-label">DOWNWIND</h2>
+    <div class="sail-grid">
+        {% for sail in DOWNWIND_SAILS %}
+        <button 
+            type="button"
+            class="sail-btn {% if current.downwind == sail %}selected{% endif %}"
+            hx-post="/sail/downwind/{{ sail }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ SAIL_DISPLAY.get(sail, sail) }}
+        </button>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Staysail Toggle (only show when JIB + REACHING_SPI) -->
+{% if current.headsail == "JIB" and current.downwind == "REACHING_SPI" %}
+<section class="sail-section staysail-section">
+    <label class="staysail-toggle">
+        <button
+            type="button"
+            class="staysail-btn {% if current.staysail_mode %}selected{% endif %}"
+            hx-post="/staysail/toggle"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {% if current.staysail_mode %}✓{% endif %} Jib as Staysail
+        </button>
+    </label>
+</section>
+{% endif %}

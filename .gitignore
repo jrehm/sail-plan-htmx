@@ -1,0 +1,7 @@
+# Sail Plan HTMX Version
+.env
+__pycache__/
+*.pyc
+.DS_Store
+.ruff_cache/
+.claude/
