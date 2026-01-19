@@ -1,85 +1,89 @@
 # Claude Code Context
 
-Project context for AI-assisted development.
+Development context for AI-assisted coding on this project.
 
-## Project Summary
+## Quick Reference
 
-**Sail Plan Tracker - HTMX Version** (v0.1.0) - FastAPI + HTMX app for logging sail configurations. Mobile-first, touch-optimized interface. Boat-specific settings configured via `boat_config.toml`. Designed to run on Raspberry Pi with OpenPlotter/Signal K/InfluxDB stack.
+- **Stack**: FastAPI + HTMX + Jinja2 + InfluxDB
+- **Port**: 8501
+- **Config**: `boat_config.toml` (requires server restart on change)
+- **Dev server**: `make run`
 
 ## Architecture
 
-```
-sail-plan-htmx/
-├── main.py              # FastAPI app + routes (~350 lines)
-├── templates/
-│   ├── index.html       # Main page layout
-│   └── partials/
-│       ├── sail_selector.html   # HTMX-swappable sail controls
-│       └── history.html         # History list
-├── static/
-│   └── app.css          # Mobile-first styles
-├── boat_config.toml     # Sail inventory config
-└── requirements.txt
+### HTMX Patterns
+
+**Partial updates**: Sail buttons POST to server, receive HTML partial in response:
+```html
+<button
+    hx-post="/sail/main/FULL"
+    hx-target="#sail-selector"
+    hx-swap="innerHTML"
+    hx-include="#sail-form"
+>
 ```
 
-### Key Patterns
+**State tracking**: Hidden form inputs track pending (unsaved) selections. Each HTMX request includes these values via `hx-include`.
 
-- **HTMX partial updates**: Sail button clicks POST to `/sail/{category}/{value}`, return updated `sail_selector.html`
-- **Hidden form state**: Pending selections tracked in hidden inputs, included with each HTMX request
-- **Optimistic UX**: CSS `:active` gives immediate tap feedback before server responds
-- **Toggle behavior**: Tapping selected sail deselects it (unlike Streamlit pills)
+**Event-driven refresh**: Server sends `HX-Trigger: historyUpdate` header to trigger history panel reload after save.
+
+**Trigger on events**: Elements can listen for custom events:
+```html
+<div hx-get="/config" hx-trigger="configUpdate from:body">
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `main.py` | FastAPI routes, InfluxDB queries, business logic |
+| `templates/index.html` | Page layout, JavaScript handlers |
+| `templates/partials/sail_selector.html` | Sail buttons, status banner (swapped by HTMX) |
+| `templates/partials/history.html` | History entries list |
+| `static/app.css` | Mobile-first styles, color-coded categories |
+| `boat_config.toml` | Sail inventory (loaded at startup) |
 
 ### Data Flow
 
-1. Page loads → fetch committed state from InfluxDB → render full page
-2. User taps sail → HTMX POST → server calculates new pending state → returns partial HTML
-3. User taps UPDATE → form submits to `/save` → write to InfluxDB → return updated partial
-4. History panel loads via `hx-get="/history"` on open
-
-## Development Commands
-
-```bash
-make run          # Local dev server (localhost:8501)
-make run-network  # Accessible on LAN (0.0.0.0:8501)
-make serve        # Production mode
-make lint         # Ruff linter
-make format       # Ruff formatter
-```
-
-## Environment
-
-- **Python**: 3.11+
-- **Key deps**: fastapi, uvicorn, jinja2, influxdb-client, htmx (CDN)
-- **Services**: InfluxDB (port 8086), Signal K (port 3000), App (port 8501)
-
-## Testing Checklist
-
-1. **Sail toggle**: Tap sail to select, tap again to deselect
-2. **Pending state**: Yellow banner + "unsaved" badge when changes pending
-3. **UPDATE button**: Disabled when no changes, green when active
-4. **History panel**: Slide-out on mobile, inline on tablet/desktop
-5. **Delete entry**: Trash icon → confirm → entry removed
-6. **Backdate**: Options → check backdate → set date/time → UPDATE
-7. **Touch targets**: Buttons large enough for wet/gloved hands
+1. **Page load**: Fetch current config from InfluxDB, render full page
+2. **Sail tap**: HTMX POST → server updates pending state → returns partial HTML
+3. **Save**: Form POST → write to InfluxDB → return partial + trigger history refresh
+4. **Delete**: DELETE request → remove from InfluxDB → trigger config refresh
 
 ## Common Tasks
 
-### Add New Sail Option
+### Add/modify sail options
 
-1. Edit `boat_config.toml`
-2. Add to appropriate list under `[sails.main]`, `[sails.headsail]`, or `[sails.downwind]`
-3. Add display name to `[display]` section
+Edit `boat_config.toml`, restart server. No code changes needed.
 
-### Modify Styling
+### Change button colors
 
-Edit `static/app.css`. Key sections:
-- `.sail-btn` - Sail selection buttons
-- `.state-banner` - Current config display
-- `.history-panel` - Slide-out history
-- Media queries at bottom for responsive behavior
+Edit `static/app.css`, find `.sail-section--main`, `.sail-section--headsail`, `.sail-section--downwind`.
 
-### Add New Route
+### Add new route
 
 1. Add route function in `main.py`
-2. If returning HTML partial, create template in `templates/partials/`
-3. Use `hx-*` attributes in templates to wire up HTMX behavior
+2. Create partial template if returning HTML
+3. Wire up with `hx-*` attributes
+
+### Debug HTMX
+
+Add to page: `<script>htmx.logAll();</script>`
+
+## Code Conventions
+
+- Routes return `TemplateResponse` for HTML, plain strings for simple content
+- Use `HX-Trigger` response header for reliable cross-component updates
+- Hidden inputs preserve state across HTMX swaps
+- JavaScript only for things HTMX can't do (backdate toggle, haptic feedback)
+- CSS uses custom properties (`--bg-primary`, etc.) with light/dark mode support
+
+## Testing Checklist
+
+1. Sail toggle: tap to select, tap again to deselect
+2. Unsaved indicator: yellow banner + badge when changes pending
+3. Notes field: typing enables UPDATE button
+4. Save: toast appears, history refreshes, notes cleared
+5. Delete: removes entry, status updates to reflect current config
+6. Backdate: toggle shows fields, save uses custom timestamp
+7. Responsive: slide-out history on mobile, inline on tablet+
