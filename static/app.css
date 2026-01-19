@@ -179,6 +179,22 @@ main {
     box-shadow: 0 0 12px rgba(139, 58, 58, 0.5);
 }
 
+/* Main sail layout: FULL on own row, R1-R4 smaller below */
+.sail-section--main .sail-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+}
+.sail-section--main .sail-btn:first-child {
+    grid-column: 1 / -1;  /* FULL spans all columns */
+}
+.sail-section--main .sail-btn:not(:first-child) {
+    min-width: unset;
+    min-height: 54px;
+    font-size: 1.1rem;
+    padding: 0.5rem;
+}
+
 .sail-section--headsail .sail-btn {
     border-color: #26395c;
 }

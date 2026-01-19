@@ -37,9 +37,6 @@
 <div class="toast" id="save-toast">Saved!</div>
 <script>
     setTimeout(() => document.getElementById('save-toast')?.remove(), 2000);
-    // Clear comment field after successful save
-    const commentField = document.getElementById('comment');
-    if (commentField) commentField.value = '';
 </script>
     {% else %}
 <div class="toast error" id="save-toast">Save failed!</div>

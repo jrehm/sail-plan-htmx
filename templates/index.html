@@ -157,6 +157,11 @@
         // Re-check after HTMX settles (fires after inline scripts run)
         document.body.addEventListener('htmx:afterSettle', (e) => {
             if (e.detail.target.id === 'sail-selector') {
+                // Clear comment field if save was successful (toast present)
+                if (document.getElementById('save-toast')) {
+                    const comment = document.getElementById('comment');
+                    if (comment) comment.value = '';
+                }
                 updateUnsavedState();
             }
         });
