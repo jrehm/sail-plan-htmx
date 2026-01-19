@@ -7,9 +7,9 @@
 
 <!-- Hidden form to track pending state and submit on save -->
 <form id="sail-form" hx-post="/save" hx-target="#sail-selector" hx-swap="innerHTML">
-    <input type="hidden" name="pending_main" id="pending-main" value="{{ current.main }}">
-    <input type="hidden" name="pending_headsail" id="pending-headsail" value="{{ current.headsail }}">
-    <input type="hidden" name="pending_downwind" id="pending-downwind" value="{{ current.downwind }}">
+    <input type="hidden" name="pending_main" id="pending-main" value="{{ current.main or 'DOWN' }}">
+    <input type="hidden" name="pending_headsail" id="pending-headsail" value="{{ current.headsail if current.headsail and current.headsail != 'None' else '' }}">
+    <input type="hidden" name="pending_downwind" id="pending-downwind" value="{{ current.downwind if current.downwind and current.downwind != 'None' else '' }}">
     <input type="hidden" name="pending_staysail" id="pending-staysail" value="{{ 'true' if current.staysail_mode else 'false' }}">
 </form>
 

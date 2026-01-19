@@ -115,6 +115,17 @@
             }
         });
 
+        // Close history panel when clicking outside
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('history-panel');
+            const toggle = document.querySelector('.history-toggle');
+            if (panel.classList.contains('open') &&
+                !panel.contains(e.target) &&
+                !toggle.contains(e.target)) {
+                panel.classList.remove('open');
+            }
+        });
+
         // Track if notes field has content for unsaved state
         function updateUnsavedState() {
             const comment = document.getElementById('comment');

@@ -126,17 +126,23 @@ def get_current_sail_config() -> dict:
         |> limit(n: 1)
     '''
     
+    def sanitize(val, default=""):
+        """Convert None or 'None' string to default value."""
+        if val is None or val == "None":
+            return default
+        return val
+
     try:
         tables = query_api.query(query)
         for table in tables:
             for record in table.records:
                 client.close()
                 return {
-                    "main": record.values.get("main", "DOWN"),
-                    "headsail": record.values.get("headsail", ""),
-                    "downwind": record.values.get("downwind", ""),
+                    "main": sanitize(record.values.get("main"), "DOWN"),
+                    "headsail": sanitize(record.values.get("headsail"), ""),
+                    "downwind": sanitize(record.values.get("downwind"), ""),
                     "staysail_mode": record.values.get("staysail_mode", False),
-                    "comment": record.values.get("comment", ""),
+                    "comment": sanitize(record.values.get("comment"), ""),
                 }
     except Exception:
         pass
@@ -243,27 +249,32 @@ def delete_sail_entry(timestamp: datetime) -> bool:
 def format_config_summary(config: dict) -> str:
     """Format sail configuration as readable summary."""
     parts = []
-    
-    main = config.get("main", "DOWN")
-    if main == "DOWN":
+
+    main = config.get("main") or "DOWN"
+    if main in ("DOWN", "None"):
+        main = "DOWN"
         parts.append("Main: DOWN")
     else:
         parts.append(f"Main: {main}")
-    
-    headsail = config.get("headsail", "")
-    if headsail:
+
+    headsail = config.get("headsail") or ""
+    if headsail and headsail != "None":
         name = SAIL_DISPLAY.get(headsail, headsail)
         if config.get("staysail_mode"):
             name += " (S)"
         parts.append(name)
-    
-    downwind = config.get("downwind", "")
-    if downwind:
+    else:
+        headsail = ""
+
+    downwind = config.get("downwind") or ""
+    if downwind and downwind != "None":
         parts.append(SAIL_DISPLAY.get(downwind, downwind))
-    
+    else:
+        downwind = ""
+
     if not headsail and not downwind and main == "DOWN":
         return "All sails down"
-    
+
     return " + ".join(parts)
 
 
