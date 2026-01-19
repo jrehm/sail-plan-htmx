@@ -111,7 +111,7 @@ def get_influx_client() -> InfluxDBClient:
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 
-def get_current_sail_config() -> dict:
+def get_current_sail_config_v2() -> dict:
     """Fetch most recent sail configuration."""
     client = get_influx_client()
     query_api = client.query_api()
@@ -119,7 +119,7 @@ def get_current_sail_config() -> dict:
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -30d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config")
+        |> filter(fn: (r) => r["_measurement"] == "sail_config_v2")
         |> filter(fn: (r) => r["vessel"] == "morticia")
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> sort(columns: ["_time"], desc: true)
@@ -127,8 +127,8 @@ def get_current_sail_config() -> dict:
     '''
     
     def sanitize(val, default=""):
-        """Convert None or 'None' string to default value."""
-        if val is None or val == "None":
+        """Convert None, 'None', or 'NONE' to default value."""
+        if val is None or val == "None" or val == "NONE":
             return default
         return val
 
@@ -151,7 +151,7 @@ def get_current_sail_config() -> dict:
     return {"main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": ""}
 
 
-def write_sail_config(
+def write_sail_config_v2(
     main: str,
     headsail: str,
     downwind: str,
@@ -165,16 +165,20 @@ def write_sail_config(
     
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
-    
+
+    # Use "NONE" placeholder instead of empty string to avoid InfluxDB field merging issues
+    headsail = headsail if headsail else "NONE"
+    downwind = downwind if downwind else "NONE"
+
     point = (
-        Point("sail_config")
+        Point("sail_config_v2")
         .tag("vessel", "morticia")
         .field("main", main)
         .field("headsail", headsail)
         .field("downwind", downwind)
         .field("staysail_mode", staysail_mode)
         .field("comment", comment)
-        .time(timestamp, WritePrecision.S)
+        .time(timestamp, WritePrecision.NS)
     )
     
     try:
@@ -194,13 +198,19 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -7d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config")
+        |> filter(fn: (r) => r["_measurement"] == "sail_config_v2")
         |> filter(fn: (r) => r["vessel"] == "morticia")
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> sort(columns: ["_time"], desc: true)
         |> limit(n: {limit})
     '''
     
+    def sanitize(val):
+        """Convert None or NONE placeholder to empty string."""
+        if val is None or val == "None" or val == "NONE":
+            return ""
+        return val
+
     entries = []
     try:
         tables = query_api.query(query)
@@ -208,11 +218,11 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
             for record in table.records:
                 entries.append({
                     "time": record.get_time(),
-                    "main": record.values.get("main", ""),
-                    "headsail": record.values.get("headsail", ""),
-                    "downwind": record.values.get("downwind", ""),
+                    "main": sanitize(record.values.get("main")) or "DOWN",
+                    "headsail": sanitize(record.values.get("headsail")),
+                    "downwind": sanitize(record.values.get("downwind")),
                     "staysail_mode": record.values.get("staysail_mode", False),
-                    "comment": record.values.get("comment", ""),
+                    "comment": sanitize(record.values.get("comment")),
                 })
     except Exception:
         pass
@@ -233,7 +243,7 @@ def delete_sail_entry(timestamp: datetime) -> bool:
         delete_api.delete(
             start=start,
             stop=stop,
-            predicate='_measurement="sail_config" AND vessel="morticia"',
+            predicate='_measurement="sail_config_v2" AND vessel="morticia"',
             bucket=INFLUX_BUCKET,
             org=INFLUX_ORG,
         )
@@ -299,7 +309,7 @@ templates.env.globals["format_config_summary"] = format_config_summary
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Main page."""
-    config = get_current_sail_config()
+    config = get_current_sail_config_v2()
     tz = get_boat_timezone()
     now = datetime.now(timezone.utc)
     
@@ -329,33 +339,52 @@ async def toggle_sail(request: Request, category: str, value: str):
     current_staysail = form.get("pending_staysail", "false") == "true"
     
     # Apply the toggle
+    # Rules:
+    # - Headsails are mutually exclusive (only one at a time)
+    # - Downwind sails are mutually exclusive (only one at a time)
+    # - Headsails and downwind are mutually exclusive, EXCEPT Jib + Reaching Spin
+    # - Staysail mode only available with Jib + Reaching Spin combo
+
     if category == "main":
-        new_main = value if value != current_main else "DOWN"  # Main defaults to DOWN
+        new_main = value if value != current_main else "DOWN"
         new_headsail = current_headsail
         new_downwind = current_downwind
         new_staysail = current_staysail
+
     elif category == "headsail":
         new_main = current_main
         new_headsail = "" if value == current_headsail else value
-        new_downwind = current_downwind
-        # Clear staysail if not JIB or no reaching spi
-        if new_headsail != "JIB" or new_downwind != "REACHING_SPI":
-            new_staysail = False
-        else:
+        new_staysail = False  # Reset staysail on any headsail change
+
+        # Headsail/downwind mutual exclusion (except Jib + Reaching Spin)
+        if new_headsail == "":
+            # Deselecting headsail - keep downwind as is
+            new_downwind = current_downwind
+        elif new_headsail == "JIB" and current_downwind == "REACHING_SPI":
+            # Jib + Reaching Spin is allowed
+            new_downwind = current_downwind
             new_staysail = current_staysail
+        else:
+            # Any other headsail clears downwind
+            new_downwind = ""
+
     elif category == "downwind":
         new_main = current_main
-        new_headsail = current_headsail
         new_downwind = "" if value == current_downwind else value
-        # Handle headsail/staysail logic for reaching spi
-        if new_downwind != "REACHING_SPI":
-            new_headsail = ""
-            new_staysail = False
-        elif new_headsail not in ["JIB", ""]:
-            new_headsail = ""
-            new_staysail = False
-        else:
+        new_staysail = False  # Reset staysail on any downwind change
+
+        # Headsail/downwind mutual exclusion (except Jib + Reaching Spin)
+        if new_downwind == "":
+            # Deselecting downwind - keep headsail as is
+            new_headsail = current_headsail
+        elif new_downwind == "REACHING_SPI" and current_headsail == "JIB":
+            # Reaching Spin + Jib is allowed
+            new_headsail = current_headsail
             new_staysail = current_staysail
+        else:
+            # Any other downwind clears headsail
+            new_headsail = ""
+
     else:
         # Unknown category, return current state
         new_main = current_main
@@ -370,7 +399,7 @@ async def toggle_sail(request: Request, category: str, value: str):
         "staysail_mode": new_staysail,
     }
     
-    committed = get_current_sail_config()
+    committed = get_current_sail_config_v2()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
@@ -399,7 +428,7 @@ async def toggle_staysail(request: Request):
         "staysail_mode": form.get("pending_staysail", "false") != "true",  # Toggle
     }
     
-    committed = get_current_sail_config()
+    committed = get_current_sail_config_v2()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
@@ -420,7 +449,7 @@ async def toggle_staysail(request: Request):
 async def save_config(request: Request):
     """Save current configuration to InfluxDB."""
     form = await request.form()
-    
+
     main = form.get("pending_main", "DOWN")
     headsail = form.get("pending_headsail", "")
     downwind = form.get("pending_downwind", "")
@@ -441,10 +470,10 @@ async def save_config(request: Request):
             local_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=tz)
             timestamp = local_dt.astimezone(timezone.utc)
     
-    success = write_sail_config(main, headsail, downwind, staysail_mode, comment, timestamp)
+    success = write_sail_config_v2(main, headsail, downwind, staysail_mode, comment, timestamp)
 
     # Return updated sail selector
-    config = get_current_sail_config()
+    config = get_current_sail_config_v2()
 
     response = templates.TemplateResponse("partials/sail_selector.html", {
         "request": request,
@@ -467,7 +496,7 @@ async def get_history(request: Request):
     """Get history panel content."""
     entries = get_recent_entries(50)
     tz = get_boat_timezone()
-    
+
     # Format entries for display
     formatted = []
     for entry in entries:
@@ -545,7 +574,7 @@ async def get_time(request: Request):
 @app.get("/config", response_class=HTMLResponse)
 async def get_config(request: Request):
     """Get current sail config partial (for refresh after delete)."""
-    config = get_current_sail_config()
+    config = get_current_sail_config_v2()
     return templates.TemplateResponse("partials/sail_selector.html", {
         "request": request,
         "pending": config,
