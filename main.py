@@ -111,7 +111,7 @@ def get_influx_client() -> InfluxDBClient:
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 
-def get_current_sail_config_v2() -> dict:
+def get_current_sail_config() -> dict:
     """Fetch most recent sail configuration."""
     client = get_influx_client()
     query_api = client.query_api()
@@ -119,7 +119,7 @@ def get_current_sail_config_v2() -> dict:
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -30d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config_v2")
+        |> filter(fn: (r) => r["_measurement"] == "sail_config")
         |> filter(fn: (r) => r["vessel"] == "morticia")
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> sort(columns: ["_time"], desc: true)
@@ -151,7 +151,7 @@ def get_current_sail_config_v2() -> dict:
     return {"main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": ""}
 
 
-def write_sail_config_v2(
+def write_sail_config(
     main: str,
     headsail: str,
     downwind: str,
@@ -171,7 +171,7 @@ def write_sail_config_v2(
     downwind = downwind if downwind else "NONE"
 
     point = (
-        Point("sail_config_v2")
+        Point("sail_config")
         .tag("vessel", "morticia")
         .field("main", main)
         .field("headsail", headsail)
@@ -198,7 +198,7 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -7d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config_v2")
+        |> filter(fn: (r) => r["_measurement"] == "sail_config")
         |> filter(fn: (r) => r["vessel"] == "morticia")
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> sort(columns: ["_time"], desc: true)
@@ -243,7 +243,7 @@ def delete_sail_entry(timestamp: datetime) -> bool:
         delete_api.delete(
             start=start,
             stop=stop,
-            predicate='_measurement="sail_config_v2" AND vessel="morticia"',
+            predicate='_measurement="sail_config" AND vessel="morticia"',
             bucket=INFLUX_BUCKET,
             org=INFLUX_ORG,
         )
@@ -309,7 +309,7 @@ templates.env.globals["format_config_summary"] = format_config_summary
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Main page."""
-    config = get_current_sail_config_v2()
+    config = get_current_sail_config()
     tz = get_boat_timezone()
     now = datetime.now(timezone.utc)
     
@@ -399,7 +399,7 @@ async def toggle_sail(request: Request, category: str, value: str):
         "staysail_mode": new_staysail,
     }
     
-    committed = get_current_sail_config_v2()
+    committed = get_current_sail_config()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
@@ -428,7 +428,7 @@ async def toggle_staysail(request: Request):
         "staysail_mode": form.get("pending_staysail", "false") != "true",  # Toggle
     }
     
-    committed = get_current_sail_config_v2()
+    committed = get_current_sail_config()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
@@ -470,10 +470,10 @@ async def save_config(request: Request):
             local_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=tz)
             timestamp = local_dt.astimezone(timezone.utc)
     
-    success = write_sail_config_v2(main, headsail, downwind, staysail_mode, comment, timestamp)
+    success = write_sail_config(main, headsail, downwind, staysail_mode, comment, timestamp)
 
     # Return updated sail selector
-    config = get_current_sail_config_v2()
+    config = get_current_sail_config()
 
     response = templates.TemplateResponse("partials/sail_selector.html", {
         "request": request,
@@ -574,7 +574,7 @@ async def get_time(request: Request):
 @app.get("/config", response_class=HTMLResponse)
 async def get_config(request: Request):
     """Get current sail config partial (for refresh after delete)."""
-    config = get_current_sail_config_v2()
+    config = get_current_sail_config()
     return templates.TemplateResponse("partials/sail_selector.html", {
         "request": request,
         "pending": config,
