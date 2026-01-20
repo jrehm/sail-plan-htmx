@@ -9,6 +9,7 @@ from __future__ import annotations
 __version__ = "0.9.0"
 
 import os
+import random
 import tomllib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -467,7 +468,10 @@ async def save_config(request: Request):
             tz = get_boat_timezone()
             from datetime import date as date_type
             d = date_type.fromisoformat(date_str)
-            local_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=tz)
+            # Add random microseconds to prevent timestamp collisions in InfluxDB
+            # (InfluxDB merges records with identical measurement + tags + timestamp)
+            random_microseconds = random.randint(0, 999999)
+            local_dt = datetime(d.year, d.month, d.day, hour, minute, 0, random_microseconds, tzinfo=tz)
             timestamp = local_dt.astimezone(timezone.utc)
     
     success = write_sail_config(main, headsail, downwind, staysail_mode, comment, timestamp)
