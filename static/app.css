@@ -523,6 +523,28 @@ main {
     .history-panel {
         box-shadow: -4px 0 20px rgba(0,0,0,0.15);
     }
+
+    /* Brighter category borders for light mode */
+    .sail-section--main .sail-btn {
+        border-color: #a04040;
+    }
+    .sail-section--main .sail-btn.selected {
+        border-color: #c05050;
+    }
+
+    .sail-section--headsail .sail-btn {
+        border-color: #4060a0;
+    }
+    .sail-section--headsail .sail-btn.selected {
+        border-color: #5070c0;
+    }
+
+    .sail-section--downwind .sail-btn {
+        border-color: #40a060;
+    }
+    .sail-section--downwind .sail-btn.selected {
+        border-color: #50c070;
+    }
 }
 
 /* Larger screens - can show history inline */
