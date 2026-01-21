@@ -11,6 +11,9 @@
     <input type="hidden" name="pending_headsail" id="pending-headsail" value="{{ current.headsail if current.headsail and current.headsail != 'None' else '' }}">
     <input type="hidden" name="pending_downwind" id="pending-downwind" value="{{ current.downwind if current.downwind and current.downwind != 'None' else '' }}">
     <input type="hidden" name="pending_staysail" id="pending-staysail" value="{{ 'true' if current.staysail_mode else 'false' }}">
+    <input type="hidden" name="pending_central" id="pending-central" value="{{ current.central_board or 'UP' }}">
+    <input type="hidden" name="pending_cfoil" id="pending-cfoil" value="{{ current.cfoil_board or 'UP' }}">
+    <input type="hidden" name="pending_cfoil_rake" id="pending-cfoil-rake" value="{{ current.cfoil_rake or '0' }}">
 </form>
 
 <!-- Current Status + Update Button -->
@@ -118,5 +121,64 @@
             {% if current.staysail_mode %}✓{% endif %} Jib as Staysail
         </button>
     </label>
+</section>
+{% endif %}
+
+<!-- Central Daggerboard -->
+<section class="sail-section sail-section--boards">
+    <h2 class="section-label">CENTRAL BOARD</h2>
+    <div class="sail-grid">
+        {% for opt in CENTRAL_BOARDS %}
+        <button
+            type="button"
+            class="sail-btn {% if current.central_board == opt %}selected{% endif %}"
+            hx-post="/sail/central/{{ opt }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ SAIL_DISPLAY.get(opt, opt) }}
+        </button>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- C-Foil Daggerboard -->
+<section class="sail-section sail-section--boards">
+    <h2 class="section-label">C-FOIL</h2>
+    <div class="sail-grid">
+        {% for opt in CFOIL_BOARDS %}
+        <button
+            type="button"
+            class="sail-btn {% if current.cfoil_board == opt %}selected{% endif %}"
+            hx-post="/sail/cfoil/{{ opt }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ SAIL_DISPLAY.get(opt, opt) }}
+        </button>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- C-Foil Rake (only show when C-foil is deployed) -->
+{% if current.cfoil_board != 'UP' %}
+<section class="sail-section sail-section--rake">
+    <h2 class="section-label">C-FOIL RAKE</h2>
+    <div class="sail-grid">
+        {% for opt in CFOIL_RAKE_OPTIONS %}
+        <button
+            type="button"
+            class="sail-btn {% if current.cfoil_rake == opt %}selected{% endif %}"
+            hx-post="/sail/cfoil_rake/{{ opt }}"
+            hx-target="#sail-selector"
+            hx-swap="innerHTML"
+            hx-include="#sail-form"
+        >
+            {{ opt }}°
+        </button>
+        {% endfor %}
+    </div>
 </section>
 {% endif %}

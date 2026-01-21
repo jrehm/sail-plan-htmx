@@ -16,6 +16,15 @@ options = ["JIB", "J1", "BIGGEE", "STORM"]
 # Downwind sail options (spinnakers, gennakers, etc.)
 options = ["REACHING_SPI", "WHOMPER"]
 
+[boards.central]
+options = ["UP", "HALF", "FULL"]
+
+[boards.cfoil]
+options = ["UP", "HALF", "FULL"]
+
+[boards.cfoil_rake]
+options = ["-1", "0", "1", "2", "3", "4"]
+
 # Display names for UI buttons (short versions)
 # Keys must match the options defined above
 [display]
@@ -31,3 +40,5 @@ STORM = "Storm"
 BIGGEE = "Biggee"
 REACHING_SPI = "Reaching Spin"
 WHOMPER = "Whomper"
+UP = "Up"
+HALF = "Half"

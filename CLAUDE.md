@@ -58,7 +58,7 @@ Edit `boat_config.toml`, restart server. No code changes needed.
 
 ### Change button colors
 
-Edit `static/app.css`, find `.sail-section--main`, `.sail-section--headsail`, `.sail-section--downwind`.
+Edit `static/app.css`, find `.sail-section--main`, `.sail-section--headsail`, `.sail-section--downwind`, `.sail-section--boards`, `.sail-section--rake`.
 
 ### Add new route
 
@@ -87,3 +87,6 @@ Add to page: `<script>htmx.logAll();</script>`
 5. Delete: removes entry, status updates to reflect current config
 6. Backdate: toggle shows fields, save uses custom timestamp
 7. Responsive: slide-out history on mobile, inline on tablet+
+8. Central board: UP/HALF/FULL toggles correctly
+9. C-foil board: UP/HALF/FULL toggles, rake section appears/hides
+10. C-foil rake: only visible when C-foil is HALF or FULL, resets on UP

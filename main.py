@@ -6,7 +6,7 @@ FastAPI backend with HTMX-powered frontend for logging sail configurations.
 
 from __future__ import annotations
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 import os
 import random
@@ -59,6 +59,9 @@ BOAT_NAME = _boat_config.get("boat", {}).get("name", "Boat")
 MAIN_STATES = _boat_config.get("sails", {}).get("main", {}).get("options", [])
 HEADSAILS = _boat_config.get("sails", {}).get("headsail", {}).get("options", [])
 DOWNWIND_SAILS = _boat_config.get("sails", {}).get("downwind", {}).get("options", [])
+CENTRAL_BOARDS = _boat_config.get("boards", {}).get("central", {}).get("options", ["UP", "HALF", "FULL"])
+CFOIL_BOARDS = _boat_config.get("boards", {}).get("cfoil", {}).get("options", ["UP", "HALF", "FULL"])
+CFOIL_RAKE_OPTIONS = _boat_config.get("boards", {}).get("cfoil_rake", {}).get("options", ["-1", "0", "1", "2", "3", "4"])
 SAIL_DISPLAY = _boat_config.get("display", {})
 
 # FastAPI app
@@ -71,6 +74,9 @@ templates.env.globals["BOAT_NAME"] = BOAT_NAME
 templates.env.globals["MAIN_STATES"] = MAIN_STATES
 templates.env.globals["HEADSAILS"] = HEADSAILS
 templates.env.globals["DOWNWIND_SAILS"] = DOWNWIND_SAILS
+templates.env.globals["CENTRAL_BOARDS"] = CENTRAL_BOARDS
+templates.env.globals["CFOIL_BOARDS"] = CFOIL_BOARDS
+templates.env.globals["CFOIL_RAKE_OPTIONS"] = CFOIL_RAKE_OPTIONS
 templates.env.globals["SAIL_DISPLAY"] = SAIL_DISPLAY
 templates.env.globals["VERSION"] = __version__
 
@@ -144,12 +150,18 @@ def get_current_sail_config() -> dict:
                     "downwind": sanitize(record.values.get("downwind"), ""),
                     "staysail_mode": record.values.get("staysail_mode", False),
                     "comment": sanitize(record.values.get("comment"), ""),
+                    "central_board": sanitize(record.values.get("central_board"), "UP"),
+                    "cfoil_board": sanitize(record.values.get("cfoil_board"), "UP"),
+                    "cfoil_rake": sanitize(record.values.get("cfoil_rake"), "0"),
                 }
     except Exception:
         pass
-    
+
     client.close()
-    return {"main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": ""}
+    return {
+        "main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": "",
+        "central_board": "UP", "cfoil_board": "UP", "cfoil_rake": "0",
+    }
 
 
 def write_sail_config(
@@ -158,18 +170,25 @@ def write_sail_config(
     downwind: str,
     staysail_mode: bool,
     comment: str,
+    central_board: str = "UP",
+    cfoil_board: str = "UP",
+    cfoil_rake: str = "0",
     timestamp: datetime | None = None,
 ) -> bool:
     """Write sail configuration to InfluxDB."""
     client = get_influx_client()
     write_api = client.write_api(write_options=SYNCHRONOUS)
-    
+
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
 
     # Use "NONE" placeholder instead of empty string to avoid InfluxDB field merging issues
     headsail = headsail if headsail else "NONE"
     downwind = downwind if downwind else "NONE"
+
+    # Reset rake to "0" when C-foil is UP
+    if cfoil_board == "UP":
+        cfoil_rake = "0"
 
     point = (
         Point("sail_config")
@@ -179,6 +198,9 @@ def write_sail_config(
         .field("downwind", downwind)
         .field("staysail_mode", staysail_mode)
         .field("comment", comment)
+        .field("central_board", central_board)
+        .field("cfoil_board", cfoil_board)
+        .field("cfoil_rake", cfoil_rake)
         .time(timestamp, WritePrecision.NS)
     )
     
@@ -224,6 +246,9 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
                     "downwind": sanitize(record.values.get("downwind")),
                     "staysail_mode": record.values.get("staysail_mode", False),
                     "comment": sanitize(record.values.get("comment")),
+                    "central_board": sanitize(record.values.get("central_board")) or "UP",
+                    "cfoil_board": sanitize(record.values.get("cfoil_board")) or "UP",
+                    "cfoil_rake": sanitize(record.values.get("cfoil_rake")) or "0",
                 })
     except Exception:
         pass
@@ -283,7 +308,22 @@ def format_config_summary(config: dict) -> str:
     else:
         downwind = ""
 
-    if not headsail and not downwind and main == "DOWN":
+    # Add board state
+    board_parts = []
+    central = config.get("central_board") or "UP"
+    cfoil = config.get("cfoil_board") or "UP"
+
+    if central != "UP":
+        board_parts.append(f"C:{SAIL_DISPLAY.get(central, central)}")
+
+    if cfoil != "UP":
+        cfoil_rake = config.get("cfoil_rake") or "0"
+        board_parts.append(f"F:{SAIL_DISPLAY.get(cfoil, cfoil)}@{cfoil_rake}°")
+
+    if board_parts:
+        parts.append(" ".join(board_parts))
+
+    if not headsail and not downwind and main == "DOWN" and not board_parts:
         return "All sails down"
 
     return " + ".join(parts)
@@ -333,79 +373,100 @@ async def toggle_sail(request: Request, category: str, value: str):
     """
     # Get current pending state from form data (hidden inputs track pending state)
     form = await request.form()
-    
+
     current_main = form.get("pending_main", "DOWN")
     current_headsail = form.get("pending_headsail", "")
     current_downwind = form.get("pending_downwind", "")
     current_staysail = form.get("pending_staysail", "false") == "true"
-    
-    # Apply the toggle
+    current_central = form.get("pending_central", "UP")
+    current_cfoil = form.get("pending_cfoil", "UP")
+    current_cfoil_rake = form.get("pending_cfoil_rake", "0")
+
+    # Initialize new values from current
+    new_main = current_main
+    new_headsail = current_headsail
+    new_downwind = current_downwind
+    new_staysail = current_staysail
+    new_central = current_central
+    new_cfoil = current_cfoil
+    new_cfoil_rake = current_cfoil_rake
+
+    # Apply the toggle based on category
     # Rules:
     # - Headsails are mutually exclusive (only one at a time)
     # - Downwind sails are mutually exclusive (only one at a time)
     # - Headsails and downwind are mutually exclusive, EXCEPT Jib + Reaching Spin
     # - Staysail mode only available with Jib + Reaching Spin combo
+    # - Boards are independent of sails and each other
+    # - Rake only relevant when C-foil is deployed (HALF or FULL)
 
     if category == "main":
         new_main = value if value != current_main else "DOWN"
-        new_headsail = current_headsail
-        new_downwind = current_downwind
-        new_staysail = current_staysail
 
     elif category == "headsail":
-        new_main = current_main
         new_headsail = "" if value == current_headsail else value
         new_staysail = False  # Reset staysail on any headsail change
 
         # Headsail/downwind mutual exclusion (except Jib + Reaching Spin)
         if new_headsail == "":
             # Deselecting headsail - keep downwind as is
-            new_downwind = current_downwind
+            pass
         elif new_headsail == "JIB" and current_downwind == "REACHING_SPI":
             # Jib + Reaching Spin is allowed
-            new_downwind = current_downwind
             new_staysail = current_staysail
         else:
             # Any other headsail clears downwind
             new_downwind = ""
 
     elif category == "downwind":
-        new_main = current_main
         new_downwind = "" if value == current_downwind else value
         new_staysail = False  # Reset staysail on any downwind change
 
         # Headsail/downwind mutual exclusion (except Jib + Reaching Spin)
         if new_downwind == "":
             # Deselecting downwind - keep headsail as is
-            new_headsail = current_headsail
+            pass
         elif new_downwind == "REACHING_SPI" and current_headsail == "JIB":
             # Reaching Spin + Jib is allowed
-            new_headsail = current_headsail
             new_staysail = current_staysail
         else:
             # Any other downwind clears headsail
             new_headsail = ""
 
-    else:
-        # Unknown category, return current state
-        new_main = current_main
-        new_headsail = current_headsail
-        new_downwind = current_downwind
-        new_staysail = current_staysail
-    
+    elif category == "central":
+        # Central board toggle - UP acts as "deselect"
+        new_central = value if value != current_central else "UP"
+
+    elif category == "cfoil":
+        # C-foil board toggle - UP acts as "deselect"
+        new_cfoil = value if value != current_cfoil else "UP"
+        # Reset rake when C-foil is raised
+        if new_cfoil == "UP":
+            new_cfoil_rake = "0"
+
+    elif category == "cfoil_rake":
+        # Rake toggle - "0" acts as default/deselect
+        new_cfoil_rake = value if value != current_cfoil_rake else "0"
+
     pending = {
         "main": new_main,
         "headsail": new_headsail,
         "downwind": new_downwind,
         "staysail_mode": new_staysail,
+        "central_board": new_central,
+        "cfoil_board": new_cfoil,
+        "cfoil_rake": new_cfoil_rake,
     }
-    
+
     committed = get_current_sail_config()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
         or pending["downwind"] != committed["downwind"]
         or pending["staysail_mode"] != committed["staysail_mode"]
+        or pending["central_board"] != committed["central_board"]
+        or pending["cfoil_board"] != committed["cfoil_board"]
+        or pending["cfoil_rake"] != committed["cfoil_rake"]
     )
     
     return templates.TemplateResponse("partials/sail_selector.html", {
@@ -421,22 +482,28 @@ async def toggle_sail(request: Request, category: str, value: str):
 async def toggle_staysail(request: Request):
     """Toggle staysail mode."""
     form = await request.form()
-    
+
     pending = {
         "main": form.get("pending_main", "DOWN"),
         "headsail": form.get("pending_headsail", ""),
         "downwind": form.get("pending_downwind", ""),
         "staysail_mode": form.get("pending_staysail", "false") != "true",  # Toggle
+        "central_board": form.get("pending_central", "UP"),
+        "cfoil_board": form.get("pending_cfoil", "UP"),
+        "cfoil_rake": form.get("pending_cfoil_rake", "0"),
     }
-    
+
     committed = get_current_sail_config()
     has_changes = (
         pending["main"] != committed["main"]
         or pending["headsail"] != committed["headsail"]
         or pending["downwind"] != committed["downwind"]
         or pending["staysail_mode"] != committed["staysail_mode"]
+        or pending["central_board"] != committed["central_board"]
+        or pending["cfoil_board"] != committed["cfoil_board"]
+        or pending["cfoil_rake"] != committed["cfoil_rake"]
     )
-    
+
     return templates.TemplateResponse("partials/sail_selector.html", {
         "request": request,
         "pending": pending,
@@ -456,7 +523,10 @@ async def save_config(request: Request):
     downwind = form.get("pending_downwind", "")
     staysail_mode = form.get("pending_staysail", "false") == "true"
     comment = form.get("comment", "")
-    
+    central_board = form.get("pending_central", "UP")
+    cfoil_board = form.get("pending_cfoil", "UP")
+    cfoil_rake = form.get("pending_cfoil_rake", "0")
+
     # Handle backdating
     backdate = form.get("backdate_enabled", "false") == "true"
     timestamp = None
@@ -473,8 +543,11 @@ async def save_config(request: Request):
             random_microseconds = random.randint(0, 999999)
             local_dt = datetime(d.year, d.month, d.day, hour, minute, 0, random_microseconds, tzinfo=tz)
             timestamp = local_dt.astimezone(timezone.utc)
-    
-    success = write_sail_config(main, headsail, downwind, staysail_mode, comment, timestamp)
+
+    success = write_sail_config(
+        main, headsail, downwind, staysail_mode, comment,
+        central_board, cfoil_board, cfoil_rake, timestamp
+    )
 
     # Return updated sail selector
     config = get_current_sail_config()
@@ -495,6 +568,31 @@ async def save_config(request: Request):
     return response
 
 
+def format_history_entry(entry: dict) -> str:
+    """Format a history entry for display."""
+    parts = []
+    if entry["main"]:
+        parts.append(f"M:{entry['main']}")
+    if entry["headsail"]:
+        h = SAIL_DISPLAY.get(entry["headsail"], entry["headsail"])
+        if entry["staysail_mode"]:
+            h += "(S)"
+        parts.append(h)
+    if entry["downwind"]:
+        parts.append(SAIL_DISPLAY.get(entry["downwind"], entry["downwind"]))
+
+    # Add board state
+    central = entry.get("central_board") or "UP"
+    cfoil = entry.get("cfoil_board") or "UP"
+    if central != "UP":
+        parts.append(f"C:{SAIL_DISPLAY.get(central, central)}")
+    if cfoil != "UP":
+        rake = entry.get("cfoil_rake") or "0"
+        parts.append(f"F:{SAIL_DISPLAY.get(cfoil, cfoil)}@{rake}°")
+
+    return " + ".join(parts) if parts else "All down"
+
+
 @app.get("/history", response_class=HTMLResponse)
 async def get_history(request: Request):
     """Get history panel content."""
@@ -504,25 +602,14 @@ async def get_history(request: Request):
     # Format entries for display
     formatted = []
     for entry in entries:
-        parts = []
-        if entry["main"]:
-            parts.append(f"M:{entry['main']}")
-        if entry["headsail"]:
-            h = SAIL_DISPLAY.get(entry["headsail"], entry["headsail"])
-            if entry["staysail_mode"]:
-                h += "(S)"
-            parts.append(h)
-        if entry["downwind"]:
-            parts.append(SAIL_DISPLAY.get(entry["downwind"], entry["downwind"]))
-        
         formatted.append({
             "time": entry["time"],
             "time_str": format_local_datetime(entry["time"], tz),
-            "config": " + ".join(parts) if parts else "All down",
+            "config": format_history_entry(entry),
             "comment": entry.get("comment", ""),
             "iso": entry["time"].isoformat(),
         })
-    
+
     return templates.TemplateResponse("partials/history.html", {
         "request": request,
         "entries": formatted,
@@ -541,21 +628,10 @@ async def delete_entry(request: Request, timestamp: str):
 
     formatted = []
     for entry in entries:
-        parts = []
-        if entry["main"]:
-            parts.append(f"M:{entry['main']}")
-        if entry["headsail"]:
-            h = SAIL_DISPLAY.get(entry["headsail"], entry["headsail"])
-            if entry["staysail_mode"]:
-                h += "(S)"
-            parts.append(h)
-        if entry["downwind"]:
-            parts.append(SAIL_DISPLAY.get(entry["downwind"], entry["downwind"]))
-
         formatted.append({
             "time": entry["time"],
             "time_str": format_local_datetime(entry["time"], tz),
-            "config": " + ".join(parts) if parts else "All down",
+            "config": format_history_entry(entry),
             "comment": entry.get("comment", ""),
             "iso": entry["time"].isoformat(),
         })
