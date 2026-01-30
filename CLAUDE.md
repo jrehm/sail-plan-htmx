@@ -1,13 +1,23 @@
-# Claude Code Context
+# CLAUDE.md
 
-Development context for AI-assisted coding on this project.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Quick Reference
 
 - **Stack**: FastAPI + HTMX + Jinja2 + InfluxDB
+- **Python**: 3.11+
 - **Port**: 8501
 - **Config**: `boat_config.toml` (requires server restart on change)
-- **Dev server**: `make run`
+
+## Commands
+
+```bash
+make run          # Dev server at localhost:8501 (with hot reload)
+make run-network  # Dev server accessible on LAN
+make serve        # Production server
+make lint         # Run ruff linter
+make format       # Run ruff formatter
+```
 
 ## Architecture
 
@@ -50,6 +60,13 @@ Development context for AI-assisted coding on this project.
 3. **Save**: Form POST → write to InfluxDB → return partial + trigger history refresh
 4. **Delete**: DELETE request → remove from InfluxDB → trigger config refresh
 
+### Logging
+
+The application uses Python's `logging` module configured at INFO level. Key log points:
+- Config loading (INFO)
+- InfluxDB operations: saves, deletes, errors (INFO/ERROR)
+- Signal K and timezone resolution (DEBUG)
+
 ## Common Tasks
 
 ### Add/modify sail options
@@ -73,10 +90,12 @@ Add to page: `<script>htmx.logAll();</script>`
 ## Code Conventions
 
 - Routes return `TemplateResponse` for HTML, plain strings for simple content
-- Use `HX-Trigger` response header for reliable cross-component updates
+- Use `HX-Trigger` response header for cross-component updates
 - Hidden inputs preserve state across HTMX swaps
 - JavaScript only for things HTMX can't do (backdate toggle, haptic feedback)
 - CSS uses custom properties (`--bg-primary`, etc.) with light/dark mode support
+- Type hints on all functions
+- Vessel name "morticia" is hardcoded in InfluxDB queries
 
 ## Testing Checklist
 
