@@ -8,23 +8,32 @@ from __future__ import annotations
 
 __version__ = "0.10.0"
 
+import logging
 import os
 import random
 import tomllib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.responses import Response
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from timezonefinder import TimezoneFinder
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -40,18 +49,22 @@ SIGNALK_URL = os.getenv("SIGNALK_URL", "http://localhost:3000")
 _tz_finder = TimezoneFinder()
 
 # Load boat config
-def load_boat_config() -> dict:
+def load_boat_config() -> dict[str, Any]:
+    """Load boat configuration from TOML file."""
     app_dir = Path(__file__).parent
     config_path = app_dir / "boat_config.toml"
     example_path = app_dir / "boat_config.toml.example"
-    
+
     if config_path.exists():
+        logger.info("Loading boat config from %s", config_path)
         with open(config_path, "rb") as f:
             return tomllib.load(f)
     elif example_path.exists():
+        logger.warning("boat_config.toml not found, using example config")
         with open(example_path, "rb") as f:
             return tomllib.load(f)
     else:
+        logger.error("No boat configuration file found")
         raise FileNotFoundError("boat_config.toml not found")
 
 _boat_config = load_boat_config()
@@ -96,8 +109,10 @@ def get_boat_position() -> tuple[float, float] | None:
             lon = data.get("value", {}).get("longitude")
             if lat is not None and lon is not None:
                 return (lat, lon)
-    except requests.RequestException:
-        pass
+        else:
+            logger.debug("Signal K returned status %d", response.status_code)
+    except requests.RequestException as e:
+        logger.debug("Failed to fetch GPS position from Signal K: %s", e)
     return None
 
 
@@ -107,22 +122,25 @@ def get_boat_timezone() -> ZoneInfo:
     if position:
         tz_name = _tz_finder.timezone_at(lat=position[0], lng=position[1])
         if tz_name:
+            logger.debug("Using GPS-based timezone: %s", tz_name)
             return ZoneInfo(tz_name)
     # Fallback to system timezone
+    logger.debug("Using system timezone (no GPS position available)")
     return datetime.now().astimezone().tzinfo
 
 
 # ============ InfluxDB ============
 
 def get_influx_client() -> InfluxDBClient:
+    """Create and return an InfluxDB client."""
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 
-def get_current_sail_config() -> dict:
-    """Fetch most recent sail configuration."""
+def get_current_sail_config() -> dict[str, Any]:
+    """Fetch most recent sail configuration from InfluxDB."""
     client = get_influx_client()
     query_api = client.query_api()
-    
+
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -30d)
@@ -132,8 +150,8 @@ def get_current_sail_config() -> dict:
         |> sort(columns: ["_time"], desc: true)
         |> limit(n: 1)
     '''
-    
-    def sanitize(val, default=""):
+
+    def sanitize(val: Any, default: str = "") -> str:
         """Convert None, 'None', or 'NONE' to default value."""
         if val is None or val == "None" or val == "NONE":
             return default
@@ -154,8 +172,8 @@ def get_current_sail_config() -> dict:
                     "cfoil_board": sanitize(record.values.get("cfoil_board"), "UP"),
                     "cfoil_rake": sanitize(record.values.get("cfoil_rake"), "0"),
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Failed to fetch sail config from InfluxDB: %s", e)
 
     client.close()
     return {
@@ -183,8 +201,8 @@ def write_sail_config(
         timestamp = datetime.now(timezone.utc)
 
     # Use "NONE" placeholder instead of empty string to avoid InfluxDB field merging issues
-    headsail = headsail if headsail else "NONE"
-    downwind = downwind if downwind else "NONE"
+    headsail_value = headsail if headsail else "NONE"
+    downwind_value = downwind if downwind else "NONE"
 
     # Reset rake to "0" when C-foil is UP
     if cfoil_board == "UP":
@@ -194,8 +212,8 @@ def write_sail_config(
         Point("sail_config")
         .tag("vessel", "morticia")
         .field("main", main)
-        .field("headsail", headsail)
-        .field("downwind", downwind)
+        .field("headsail", headsail_value)
+        .field("downwind", downwind_value)
         .field("staysail_mode", staysail_mode)
         .field("comment", comment)
         .field("central_board", central_board)
@@ -203,21 +221,26 @@ def write_sail_config(
         .field("cfoil_rake", cfoil_rake)
         .time(timestamp, WritePrecision.NS)
     )
-    
+
     try:
         write_api.write(bucket=INFLUX_BUCKET, record=point)
+        logger.info(
+            "Saved sail config: main=%s, headsail=%s, downwind=%s",
+            main, headsail, downwind
+        )
         client.close()
         return True
-    except Exception:
+    except Exception as e:
+        logger.error("Failed to write sail config to InfluxDB: %s", e)
         client.close()
         return False
 
 
-def get_recent_entries(limit: int = 50) -> list[dict]:
-    """Fetch recent sail log entries."""
+def get_recent_entries(limit: int = 50) -> list[dict[str, Any]]:
+    """Fetch recent sail log entries from InfluxDB."""
     client = get_influx_client()
     query_api = client.query_api()
-    
+
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -7d)
@@ -227,14 +250,14 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
         |> sort(columns: ["_time"], desc: true)
         |> limit(n: {limit})
     '''
-    
-    def sanitize(val):
+
+    def sanitize(val: Any) -> str:
         """Convert None or NONE placeholder to empty string."""
         if val is None or val == "None" or val == "NONE":
             return ""
         return val
 
-    entries = []
+    entries: list[dict[str, Any]] = []
     try:
         tables = query_api.query(query)
         for table in tables:
@@ -250,21 +273,22 @@ def get_recent_entries(limit: int = 50) -> list[dict]:
                     "cfoil_board": sanitize(record.values.get("cfoil_board")) or "UP",
                     "cfoil_rake": sanitize(record.values.get("cfoil_rake")) or "0",
                 })
-    except Exception:
-        pass
-    
+        logger.debug("Fetched %d history entries", len(entries))
+    except Exception as e:
+        logger.error("Failed to fetch recent entries from InfluxDB: %s", e)
+
     client.close()
     return entries
 
 
 def delete_sail_entry(timestamp: datetime) -> bool:
-    """Delete a sail configuration entry."""
+    """Delete a sail configuration entry from InfluxDB."""
     client = get_influx_client()
     delete_api = client.delete_api()
-    
+
     start = timestamp - timedelta(milliseconds=500)
     stop = timestamp + timedelta(milliseconds=500)
-    
+
     try:
         delete_api.delete(
             start=start,
@@ -273,16 +297,18 @@ def delete_sail_entry(timestamp: datetime) -> bool:
             bucket=INFLUX_BUCKET,
             org=INFLUX_ORG,
         )
+        logger.info("Deleted sail entry at %s", timestamp.isoformat())
         client.close()
         return True
-    except Exception:
+    except Exception as e:
+        logger.error("Failed to delete sail entry at %s: %s", timestamp.isoformat(), e)
         client.close()
         return False
 
 
 # ============ Helper Functions ============
 
-def format_config_summary(config: dict) -> str:
+def format_config_summary(config: dict[str, Any]) -> str:
     """Format sail configuration as readable summary."""
     parts = []
 
@@ -348,8 +374,8 @@ templates.env.globals["format_config_summary"] = format_config_summary
 # ============ Routes ============
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """Main page."""
+async def index(request: Request) -> Response:
+    """Render the main page."""
     config = get_current_sail_config()
     tz = get_boat_timezone()
     now = datetime.now(timezone.utc)
@@ -364,10 +390,10 @@ async def index(request: Request):
 
 
 @app.post("/sail/{category}/{value}", response_class=HTMLResponse)
-async def toggle_sail(request: Request, category: str, value: str):
+async def toggle_sail(request: Request, category: str, value: str) -> Response:
     """
     Toggle a sail selection. Returns updated sail selector partial.
-    
+
     HTMX calls this when user taps a sail button.
     If tapping already-selected sail, it deselects (sends empty value).
     """
@@ -479,7 +505,7 @@ async def toggle_sail(request: Request, category: str, value: str):
 
 
 @app.post("/staysail/toggle", response_class=HTMLResponse)
-async def toggle_staysail(request: Request):
+async def toggle_staysail(request: Request) -> Response:
     """Toggle staysail mode."""
     form = await request.form()
 
@@ -514,7 +540,7 @@ async def toggle_staysail(request: Request):
 
 
 @app.post("/save", response_class=HTMLResponse)
-async def save_config(request: Request):
+async def save_config(request: Request) -> Response:
     """Save current configuration to InfluxDB."""
     form = await request.form()
 
@@ -568,7 +594,7 @@ async def save_config(request: Request):
     return response
 
 
-def format_history_entry(entry: dict) -> str:
+def format_history_entry(entry: dict[str, Any]) -> str:
     """Format a history entry for display."""
     parts = []
     if entry["main"]:
@@ -594,7 +620,7 @@ def format_history_entry(entry: dict) -> str:
 
 
 @app.get("/history", response_class=HTMLResponse)
-async def get_history(request: Request):
+async def get_history(request: Request) -> Response:
     """Get history panel content."""
     entries = get_recent_entries(50)
     tz = get_boat_timezone()
@@ -617,7 +643,7 @@ async def get_history(request: Request):
 
 
 @app.delete("/entry/{timestamp}", response_class=HTMLResponse)
-async def delete_entry(request: Request, timestamp: str):
+async def delete_entry(request: Request, timestamp: str) -> Response:
     """Delete a history entry."""
     dt = datetime.fromisoformat(timestamp)
     delete_sail_entry(dt)
@@ -644,7 +670,7 @@ async def delete_entry(request: Request, timestamp: str):
 
 
 @app.get("/time", response_class=HTMLResponse)
-async def get_time(request: Request):
+async def get_time(request: Request) -> str:
     """Get current time (for periodic refresh)."""
     tz = get_boat_timezone()
     now = datetime.now(timezone.utc)
@@ -652,7 +678,7 @@ async def get_time(request: Request):
 
 
 @app.get("/config", response_class=HTMLResponse)
-async def get_config(request: Request):
+async def get_config(request: Request) -> Response:
     """Get current sail config partial (for refresh after delete)."""
     config = get_current_sail_config()
     return templates.TemplateResponse("partials/sail_selector.html", {
