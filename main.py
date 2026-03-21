@@ -78,7 +78,7 @@ CFOIL_RAKE_OPTIONS = _boat_config.get("boards", {}).get("cfoil_rake", {}).get("o
 SAIL_DISPLAY = _boat_config.get("display", {})
 
 # FastAPI app
-app = FastAPI(title=f"{BOAT_NAME} Sail Plan", root_path=os.getenv("FASTAPI_ROOT_PATH", ""))
+app = FastAPI(title=f"{BOAT_NAME} Sail Plan")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
