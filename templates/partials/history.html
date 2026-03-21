@@ -19,7 +19,7 @@
         </div>
         <button 
             class="history-delete"
-            hx-delete="/entry/{{ entry.iso }}"
+            hx-delete="entry/{{ entry.iso }}"
             hx-target="#history-content"
             hx-swap="innerHTML"
             hx-confirm="Delete this entry?"

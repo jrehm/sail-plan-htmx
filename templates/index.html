@@ -6,19 +6,19 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{{ BOAT_NAME }} Sail Plan</title>
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="static/app.css">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body>
     <!-- Header -->
     <header class="header">
         <span class="header-title">{{ BOAT_NAME.upper() }}</span>
-        <span class="header-time" hx-get="/time" hx-trigger="every 30s" hx-swap="innerHTML">{{ current_time }}</span>
+        <span class="header-time" hx-get="time" hx-trigger="every 30s" hx-swap="innerHTML">{{ current_time }}</span>
     </header>
 
     <main>
         <!-- Sail Selector (HTMX-swappable region) -->
-        <div id="sail-selector" hx-get="/config" hx-trigger="configUpdate from:body, every 60s" hx-swap="innerHTML">
+        <div id="sail-selector" hx-get="config" hx-trigger="configUpdate from:body, every 60s" hx-swap="innerHTML">
             {% include "partials/sail_selector.html" %}
         </div>
 
@@ -76,7 +76,7 @@
             </div>
             <div
                 id="history-content"
-                hx-get="/history"
+                hx-get="history"
                 hx-trigger="load, historyUpdate from:body, every 60s"
                 hx-swap="innerHTML"
             >

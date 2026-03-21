@@ -6,7 +6,7 @@
 {% set show_changes = has_changes if has_changes is defined else false %}
 
 <!-- Hidden form to track pending state and submit on save -->
-<form id="sail-form" hx-post="/save" hx-target="#sail-selector" hx-swap="innerHTML">
+<form id="sail-form" hx-post="save" hx-target="#sail-selector" hx-swap="innerHTML">
     <input type="hidden" name="pending_main" id="pending-main" value="{{ current.main or 'DOWN' }}">
     <input type="hidden" name="pending_headsail" id="pending-headsail" value="{{ current.headsail if current.headsail and current.headsail != 'None' else '' }}">
     <input type="hidden" name="pending_downwind" id="pending-downwind" value="{{ current.downwind if current.downwind and current.downwind != 'None' else '' }}">
@@ -57,7 +57,7 @@
         <button 
             type="button"
             class="sail-btn {% if current.main == sail %}selected{% endif %}"
-            hx-post="/sail/main/{{ sail }}"
+            hx-post="sail/main/{{ sail }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -76,7 +76,7 @@
         <button 
             type="button"
             class="sail-btn {% if current.headsail == sail %}selected{% endif %}"
-            hx-post="/sail/headsail/{{ sail }}"
+            hx-post="sail/headsail/{{ sail }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -95,7 +95,7 @@
         <button 
             type="button"
             class="sail-btn {% if current.downwind == sail %}selected{% endif %}"
-            hx-post="/sail/downwind/{{ sail }}"
+            hx-post="sail/downwind/{{ sail }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -113,7 +113,7 @@
         <button
             type="button"
             class="staysail-btn {% if current.staysail_mode %}selected{% endif %}"
-            hx-post="/staysail/toggle"
+            hx-post="staysail/toggle"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -132,7 +132,7 @@
         <button
             type="button"
             class="sail-btn {% if current.central_board == opt %}selected{% endif %}"
-            hx-post="/sail/central/{{ opt }}"
+            hx-post="sail/central/{{ opt }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -151,7 +151,7 @@
         <button
             type="button"
             class="sail-btn {% if current.cfoil_board == opt %}selected{% endif %}"
-            hx-post="/sail/cfoil/{{ opt }}"
+            hx-post="sail/cfoil/{{ opt }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
@@ -171,7 +171,7 @@
         <button
             type="button"
             class="sail-btn {% if current.cfoil_rake == opt %}selected{% endif %}"
-            hx-post="/sail/cfoil_rake/{{ opt }}"
+            hx-post="sail/cfoil_rake/{{ opt }}"
             hx-target="#sail-selector"
             hx-swap="innerHTML"
             hx-include="#sail-form"
