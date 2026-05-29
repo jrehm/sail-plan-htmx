@@ -110,3 +110,18 @@ These are accepted, not action items:
 - Deleted entries are removed from InfluxDB entirely, which may create apparent
   configuration gaps in analysis. In practice the dataset is large enough that brief
   gaps are negligible for polar purposes.
+
+---
+
+## Revisited — 2026-05
+
+The `inspired-technologies/signalk-sailsconfig` fork (v0.9.5/0.9.6) was evaluated. It
+adds a clean REST API with registered PUT handlers (`PUT /sails`, `/sails/{id}/active`,
+`/sails/{id}/reducedState`), which would remove the 405/no-handler blocker for the
+sail-state portion. The decision still stands: boards and rake have no home in the
+plugin's fixed `{id, active, reducedState}` schema, and no Signal K consumer (Zeus3,
+OpenCPN, other plugins, instrument displays) actually needs to read live sail state.
+Without that consumer-side motivation, the integration only re-solves the polar-correlation
+problem that `pandas.merge_asof()` already handles. Forking a community plugin that is
+itself moving upstream (PR pending into `SignalK/sailsconfiguration`) would also be the
+wrong maintenance posture even if the schema fit.
