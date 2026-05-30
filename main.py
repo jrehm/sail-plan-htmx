@@ -380,8 +380,7 @@ async def index(request: Request) -> Response:
     tz = get_boat_timezone()
     now = datetime.now(timezone.utc)
     
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "config": config,
         "summary": format_config_summary(config),
         "current_time": format_local_time(now, tz),
@@ -495,8 +494,7 @@ async def toggle_sail(request: Request, category: str, value: str) -> Response:
         or pending["cfoil_rake"] != committed["cfoil_rake"]
     )
     
-    return templates.TemplateResponse("partials/sail_selector.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/sail_selector.html", {
         "pending": pending,
         "committed": committed,
         "has_changes": has_changes,
@@ -530,8 +528,7 @@ async def toggle_staysail(request: Request) -> Response:
         or pending["cfoil_rake"] != committed["cfoil_rake"]
     )
 
-    return templates.TemplateResponse("partials/sail_selector.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/sail_selector.html", {
         "pending": pending,
         "committed": committed,
         "has_changes": has_changes,
@@ -578,8 +575,7 @@ async def save_config(request: Request) -> Response:
     # Return updated sail selector
     config = get_current_sail_config()
 
-    response = templates.TemplateResponse("partials/sail_selector.html", {
-        "request": request,
+    response = templates.TemplateResponse(request, "partials/sail_selector.html", {
         "pending": config,  # After save, pending = committed
         "committed": config,
         "has_changes": False,
@@ -636,8 +632,7 @@ async def get_history(request: Request) -> Response:
             "iso": entry["time"].isoformat(),
         })
 
-    return templates.TemplateResponse("partials/history.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/history.html", {
         "entries": formatted,
     })
 
@@ -662,8 +657,7 @@ async def delete_entry(request: Request, timestamp: str) -> Response:
             "iso": entry["time"].isoformat(),
         })
 
-    return templates.TemplateResponse("partials/history.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/history.html", {
         "entries": formatted,
         "after_delete": True,
     })
@@ -681,8 +675,7 @@ async def get_time(request: Request) -> str:
 async def get_config(request: Request) -> Response:
     """Get current sail config partial (for refresh after delete)."""
     config = get_current_sail_config()
-    return templates.TemplateResponse("partials/sail_selector.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/sail_selector.html", {
         "pending": config,
         "committed": config,
         "has_changes": False,
