@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- LICENSE file (MIT) — README already referenced an MIT license and badge,
+  but the actual file was missing from the repo until now
 - Structured logging throughout the application
   - INFO level logs for config loading, saves, and deletes
   - ERROR level logs for InfluxDB and Signal K failures
