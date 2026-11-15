@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Quick Reference
 
-- **Stack**: FastAPI + HTMX + Jinja2 + InfluxDB
+- **Stack**: FastAPI + HTMX + Jinja2 + QuestDB (HTTP `/exec`, via `requests`)
 - **Python**: 3.11+
 - **Port**: 8501
 - **Config**: `boat_config.toml` (requires server restart on change)
@@ -46,7 +46,7 @@ make format       # Run ruff formatter
 
 | File | Purpose |
 |------|---------|
-| `main.py` | FastAPI routes, InfluxDB queries, business logic |
+| `main.py` | FastAPI routes, QuestDB queries, business logic |
 | `templates/index.html` | Page layout, JavaScript handlers |
 | `templates/partials/sail_selector.html` | Sail buttons, status banner (swapped by HTMX) |
 | `templates/partials/history.html` | History entries list |
@@ -55,16 +55,16 @@ make format       # Run ruff formatter
 
 ### Data Flow
 
-1. **Page load**: Fetch current config from InfluxDB, render full page
+1. **Page load**: Fetch current config from QuestDB, render full page
 2. **Sail tap**: HTMX POST → server updates pending state → returns partial HTML
-3. **Save**: Form POST → write to InfluxDB → return partial + trigger history refresh
-4. **Delete**: DELETE request → remove from InfluxDB → trigger config refresh
+3. **Save**: Form POST → write to QuestDB → return partial + trigger history refresh
+4. **Delete**: DELETE request → soft-delete in QuestDB → trigger config refresh
 
 ### Logging
 
 The application uses Python's `logging` module configured at INFO level. Key log points:
 - Config loading (INFO)
-- InfluxDB operations: saves, deletes, errors (INFO/ERROR)
+- QuestDB operations: saves, deletes, errors (INFO/ERROR)
 - Signal K and timezone resolution (DEBUG)
 
 ## Common Tasks
@@ -95,7 +95,11 @@ Add to page: `<script>htmx.logAll();</script>`
 - JavaScript only for things HTMX can't do (backdate toggle, haptic feedback)
 - CSS uses custom properties (`--bg-primary`, etc.) with light/dark mode support
 - Type hints on all functions
-- Vessel name "morticia" is hardcoded in InfluxDB queries
+- Vessel name "morticia" is hardcoded (`VESSEL`) in the QuestDB queries
+- QuestDB has no row DELETE: entries are soft-deleted (`deleted = true`); every read must keep the `coalesce(deleted, false) = false` filter
+- WAL writes are visible to SELECT only after apply: keep `_wait_applied()` after any write/update before re-reading
+- Never build SQL by string-formatting user input; use `_sql_str()` (quote doubling) like the existing queries
+- Set `SAIL_TABLE=<scratch>` to test against a throwaway table instead of the real log
 
 ## Testing Checklist
 

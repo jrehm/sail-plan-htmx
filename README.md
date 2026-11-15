@@ -31,7 +31,7 @@ A mobile-first web app for logging sail configurations and daggerboard positions
 ## Requirements
 
 - Python 3.11+
-- InfluxDB 2.x
+- QuestDB (HTTP API on port 9000)
 - Signal K (optional, for GPS-based timezone)
 
 ## Quick Start
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 
 # Configure
 cp .env.example .env
-# Edit .env with your InfluxDB credentials
+# Edit .env (QuestDB URL, Signal K URL)
 
 # Run
 make run
@@ -61,10 +61,7 @@ Access at `http://localhost:8501`
 Create a `.env` file:
 
 ```bash
-INFLUX_URL=http://localhost:8086
-INFLUX_TOKEN=your-token-here
-INFLUX_ORG=your-org
-INFLUX_BUCKET=your-bucket
+QUESTDB_URL=http://localhost:9000
 SIGNALK_URL=http://localhost:3000  # Optional
 ```
 
@@ -128,7 +125,7 @@ make serve        # Start production server
 ```ini
 [Unit]
 Description=Sail Plan Tracker
-After=network.target influxdb.service
+After=network.target marine-questdb-container.service
 
 [Service]
 Type=simple
@@ -171,7 +168,7 @@ sail-plan-htmx/
 
 ## Data Schema
 
-Data is stored in InfluxDB `sail_config` measurement:
+Data is stored in the QuestDB table `sail_config` (one row per entry, `ts` is the entry time; `deleted` marks soft-deleted rows):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -184,7 +181,7 @@ Data is stored in InfluxDB `sail_config` measurement:
 | `cfoil_rake` | string | C-foil rake angle (-1 to 4) |
 | `comment` | string | Optional note |
 
-Tagged with `vessel` for multi-boat support.
+`vessel` (SYMBOL) supports multiple boats; rows are unique on `(ts, vessel)`.
 
 ## Contributing
 
@@ -206,4 +203,4 @@ Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
 - [HTMX](https://htmx.org/) - HTML-driven interactivity
 - [Jinja2](https://jinja.palletsprojects.com/) - Template engine
-- [InfluxDB](https://www.influxdata.com/) - Time-series database
+- [QuestDB](https://questdb.com/) - Time-series database

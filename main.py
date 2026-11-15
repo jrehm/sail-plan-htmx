@@ -6,11 +6,12 @@ FastAPI backend with HTMX-powered frontend for logging sail configurations.
 
 from __future__ import annotations
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 import logging
 import os
 import random
+import time
 import tomllib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -24,8 +25,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.responses import Response
-from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
 from timezonefinder import TimezoneFinder
 
 # Configure logging
@@ -39,10 +38,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Configuration
-INFLUX_URL = os.getenv("INFLUX_URL", "http://localhost:8086")
-INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", "")
-INFLUX_ORG = os.getenv("INFLUX_ORG", "openplotter")
-INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "default")
+QUESTDB_URL = os.getenv("QUESTDB_URL", "http://localhost:9000")
+VESSEL = "morticia"
+TABLE = os.getenv("SAIL_TABLE", "sail_config")  # override only for testing
 SIGNALK_URL = os.getenv("SIGNALK_URL", "http://localhost:3000")
 
 # Timezone finder (reused)
@@ -129,57 +127,126 @@ def get_boat_timezone() -> ZoneInfo:
     return datetime.now().astimezone().tzinfo
 
 
-# ============ InfluxDB ============
+# ============ QuestDB ============
+#
+# Sail log entries live in the QuestDB table `sail_config`, one row per entry
+# (see SAIL_CONFIG_DDL). QuestDB has no row DELETE, so deleting an entry sets
+# `deleted = true` (UPDATE) and every read filters those rows out.
 
-def get_influx_client() -> InfluxDBClient:
-    """Create and return an InfluxDB client."""
-    return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+SAIL_CONFIG_DDL = f"""
+CREATE TABLE IF NOT EXISTS {TABLE} (
+    ts TIMESTAMP,
+    vessel SYMBOL,
+    main VARCHAR,
+    headsail VARCHAR,
+    downwind VARCHAR,
+    staysail_mode BOOLEAN,
+    comment VARCHAR,
+    central_board VARCHAR,
+    cfoil_board VARCHAR,
+    cfoil_rake VARCHAR,
+    deleted BOOLEAN
+) TIMESTAMP(ts) PARTITION BY YEAR WAL
+DEDUP UPSERT KEYS(ts, vessel)
+"""
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": "",
+    "central_board": "UP", "cfoil_board": "UP", "cfoil_rake": "0",
+}
+
+
+def _sql_str(value: str) -> str:
+    """Quote a value as a QuestDB SQL string literal (single quotes doubled).
+
+    This is the only way user-supplied text (e.g. the comment) enters SQL.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _ts_literal(dt: datetime) -> str:
+    """UTC timestamp literal with microsecond precision, e.g. '2026-09-21T14:13:20.123456Z'."""
+    return "'" + dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ") + "'"
+
+
+def _qdb_exec(sql: str) -> dict[str, Any]:
+    """Run one SQL statement against QuestDB's HTTP API; raise on error."""
+    resp = requests.get(f"{QUESTDB_URL}/exec", params={"query": sql}, timeout=10)
+    resp.raise_for_status()
+    payload = resp.json()
+    if "error" in payload:
+        raise RuntimeError(payload["error"])
+    return payload
+
+
+def _wait_applied(table: str = TABLE, timeout: float = 3.0) -> None:
+    """Block until QuestDB has applied our last WAL write to `table`.
+
+    WAL tables acknowledge a write once it is durable in the WAL, but a SELECT
+    only sees it after it is applied (milliseconds later). The UI re-reads
+    immediately after a save/delete, so wait for apply to catch up.
+    """
+    deadline = datetime.now().timestamp() + timeout
+    while datetime.now().timestamp() < deadline:
+        rows = _qdb_exec(
+            f"SELECT writerTxn, sequencerTxn FROM wal_tables() WHERE name = {_sql_str(table)}"
+        )["dataset"]
+        if not rows or rows[0][0] == rows[0][1]:
+            return
+        time.sleep(0.025)
+    logger.warning("Timed out waiting for QuestDB to apply writes to %s", table)
+
+
+def ensure_schema() -> None:
+    """Create the sail log table if it does not exist (idempotent)."""
+    try:
+        _qdb_exec(SAIL_CONFIG_DDL)
+    except Exception as e:
+        logger.error("Failed to ensure QuestDB %s table: %s", TABLE, e)
+
+
+_SELECT_COLUMNS = (
+    "ts, main, headsail, downwind, staysail_mode, comment, "
+    "central_board, cfoil_board, cfoil_rake"
+)
+
+
+def _row_to_entry(row: list[Any]) -> dict[str, Any]:
+    """Convert a _SELECT_COLUMNS row into the dict shape the templates expect."""
+    ts, main, headsail, downwind, staysail, comment, central, cfoil, rake = row
+
+    def clean(val: Any) -> str:
+        """None and the legacy 'NONE' placeholder both mean empty."""
+        return "" if val is None or val in ("None", "NONE") else val
+
+    return {
+        "time": datetime.fromisoformat(ts.replace("Z", "+00:00")),
+        "main": clean(main) or "DOWN",
+        "headsail": clean(headsail),
+        "downwind": clean(downwind),
+        "staysail_mode": bool(staysail),
+        "comment": clean(comment),
+        "central_board": clean(central) or "UP",
+        "cfoil_board": clean(cfoil) or "UP",
+        "cfoil_rake": clean(rake) or "0",
+    }
 
 
 def get_current_sail_config() -> dict[str, Any]:
-    """Fetch most recent sail configuration from InfluxDB."""
-    client = get_influx_client()
-    query_api = client.query_api()
-
-    query = f'''
-    from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -30d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config")
-        |> filter(fn: (r) => r["vessel"] == "morticia")
-        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-        |> sort(columns: ["_time"], desc: true)
-        |> limit(n: 1)
-    '''
-
-    def sanitize(val: Any, default: str = "") -> str:
-        """Convert None, 'None', or 'NONE' to default value."""
-        if val is None or val == "None" or val == "NONE":
-            return default
-        return val
-
+    """Fetch the most recent (non-deleted) sail configuration."""
     try:
-        tables = query_api.query(query)
-        for table in tables:
-            for record in table.records:
-                client.close()
-                return {
-                    "main": sanitize(record.values.get("main"), "DOWN"),
-                    "headsail": sanitize(record.values.get("headsail"), ""),
-                    "downwind": sanitize(record.values.get("downwind"), ""),
-                    "staysail_mode": record.values.get("staysail_mode", False),
-                    "comment": sanitize(record.values.get("comment"), ""),
-                    "central_board": sanitize(record.values.get("central_board"), "UP"),
-                    "cfoil_board": sanitize(record.values.get("cfoil_board"), "UP"),
-                    "cfoil_rake": sanitize(record.values.get("cfoil_rake"), "0"),
-                }
+        rows = _qdb_exec(
+            f"SELECT {_SELECT_COLUMNS} FROM {TABLE} "
+            f"WHERE vessel = {_sql_str(VESSEL)} AND coalesce(deleted, false) = false "
+            f"AND ts > dateadd('d', -30, now()) ORDER BY ts DESC LIMIT 1"
+        )["dataset"]
+        if rows:
+            entry = _row_to_entry(rows[0])
+            entry.pop("time")
+            return entry
     except Exception as e:
-        logger.error("Failed to fetch sail config from InfluxDB: %s", e)
-
-    client.close()
-    return {
-        "main": "DOWN", "headsail": "", "downwind": "", "staysail_mode": False, "comment": "",
-        "central_board": "UP", "cfoil_board": "UP", "cfoil_rake": "0",
-    }
+        logger.error("Failed to fetch sail config from QuestDB: %s", e)
+    return dict(DEFAULT_CONFIG)
 
 
 def write_sail_config(
@@ -193,117 +260,70 @@ def write_sail_config(
     cfoil_rake: str = "0",
     timestamp: datetime | None = None,
 ) -> bool:
-    """Write sail configuration to InfluxDB."""
-    client = get_influx_client()
-    write_api = client.write_api(write_options=SYNCHRONOUS)
-
+    """Write a sail configuration entry to QuestDB."""
+    ensure_schema()  # cheap; covers QuestDB being unavailable at app start
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
-
-    # Use "NONE" placeholder instead of empty string to avoid InfluxDB field merging issues
-    headsail_value = headsail if headsail else "NONE"
-    downwind_value = downwind if downwind else "NONE"
 
     # Reset rake to "0" when C-foil is UP
     if cfoil_board == "UP":
         cfoil_rake = "0"
 
-    point = (
-        Point("sail_config")
-        .tag("vessel", "morticia")
-        .field("main", main)
-        .field("headsail", headsail_value)
-        .field("downwind", downwind_value)
-        .field("staysail_mode", staysail_mode)
-        .field("comment", comment)
-        .field("central_board", central_board)
-        .field("cfoil_board", cfoil_board)
-        .field("cfoil_rake", cfoil_rake)
-        .time(timestamp, WritePrecision.NS)
+    sql = (
+        f"INSERT INTO {TABLE} (ts, vessel, main, headsail, downwind, staysail_mode, "
+        "comment, central_board, cfoil_board, cfoil_rake) VALUES ("
+        f"{_ts_literal(timestamp)}, {_sql_str(VESSEL)}, {_sql_str(main)}, "
+        f"{_sql_str(headsail or '')}, {_sql_str(downwind or '')}, "
+        f"{'true' if staysail_mode else 'false'}, {_sql_str(comment or '')}, "
+        f"{_sql_str(central_board)}, {_sql_str(cfoil_board)}, {_sql_str(cfoil_rake)})"
     )
-
     try:
-        write_api.write(bucket=INFLUX_BUCKET, record=point)
+        _qdb_exec(sql)
+        _wait_applied()
         logger.info(
             "Saved sail config: main=%s, headsail=%s, downwind=%s",
             main, headsail, downwind
         )
-        client.close()
         return True
     except Exception as e:
-        logger.error("Failed to write sail config to InfluxDB: %s", e)
-        client.close()
+        logger.error("Failed to write sail config to QuestDB: %s", e)
         return False
 
 
 def get_recent_entries(limit: int = 50) -> list[dict[str, Any]]:
-    """Fetch recent sail log entries from InfluxDB."""
-    client = get_influx_client()
-    query_api = client.query_api()
-
-    query = f'''
-    from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -7d)
-        |> filter(fn: (r) => r["_measurement"] == "sail_config")
-        |> filter(fn: (r) => r["vessel"] == "morticia")
-        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
-        |> sort(columns: ["_time"], desc: true)
-        |> limit(n: {limit})
-    '''
-
-    def sanitize(val: Any) -> str:
-        """Convert None or NONE placeholder to empty string."""
-        if val is None or val == "None" or val == "NONE":
-            return ""
-        return val
-
-    entries: list[dict[str, Any]] = []
+    """Fetch recent (non-deleted) sail log entries, newest first."""
     try:
-        tables = query_api.query(query)
-        for table in tables:
-            for record in table.records:
-                entries.append({
-                    "time": record.get_time(),
-                    "main": sanitize(record.values.get("main")) or "DOWN",
-                    "headsail": sanitize(record.values.get("headsail")),
-                    "downwind": sanitize(record.values.get("downwind")),
-                    "staysail_mode": record.values.get("staysail_mode", False),
-                    "comment": sanitize(record.values.get("comment")),
-                    "central_board": sanitize(record.values.get("central_board")) or "UP",
-                    "cfoil_board": sanitize(record.values.get("cfoil_board")) or "UP",
-                    "cfoil_rake": sanitize(record.values.get("cfoil_rake")) or "0",
-                })
+        rows = _qdb_exec(
+            f"SELECT {_SELECT_COLUMNS} FROM {TABLE} "
+            f"WHERE vessel = {_sql_str(VESSEL)} AND coalesce(deleted, false) = false "
+            f"AND ts > dateadd('d', -7, now()) ORDER BY ts DESC LIMIT {int(limit)}"
+        )["dataset"]
+        entries = [_row_to_entry(r) for r in rows]
         logger.debug("Fetched %d history entries", len(entries))
+        return entries
     except Exception as e:
-        logger.error("Failed to fetch recent entries from InfluxDB: %s", e)
-
-    client.close()
-    return entries
+        logger.error("Failed to fetch recent entries from QuestDB: %s", e)
+        return []
 
 
 def delete_sail_entry(timestamp: datetime) -> bool:
-    """Delete a sail configuration entry from InfluxDB."""
-    client = get_influx_client()
-    delete_api = client.delete_api()
-
+    """Soft-delete a sail configuration entry (QuestDB has no row DELETE)."""
     start = timestamp - timedelta(milliseconds=500)
     stop = timestamp + timedelta(milliseconds=500)
-
     try:
-        delete_api.delete(
-            start=start,
-            stop=stop,
-            predicate='_measurement="sail_config" AND vessel="morticia"',
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG,
+        _qdb_exec(
+            f"UPDATE {TABLE} SET deleted = true WHERE vessel = {_sql_str(VESSEL)} "
+            f"AND ts BETWEEN {_ts_literal(start)} AND {_ts_literal(stop)}"
         )
+        _wait_applied()
         logger.info("Deleted sail entry at %s", timestamp.isoformat())
-        client.close()
         return True
     except Exception as e:
         logger.error("Failed to delete sail entry at %s: %s", timestamp.isoformat(), e)
-        client.close()
         return False
+
+
+ensure_schema()  # create the table on first run (idempotent)
 
 
 # ============ Helper Functions ============
@@ -538,7 +558,7 @@ async def toggle_staysail(request: Request) -> Response:
 
 @app.post("/save", response_class=HTMLResponse)
 async def save_config(request: Request) -> Response:
-    """Save current configuration to InfluxDB."""
+    """Save current configuration to QuestDB."""
     form = await request.form()
 
     main = form.get("pending_main", "DOWN")
@@ -561,8 +581,8 @@ async def save_config(request: Request) -> Response:
             tz = get_boat_timezone()
             from datetime import date as date_type
             d = date_type.fromisoformat(date_str)
-            # Add random microseconds to prevent timestamp collisions in InfluxDB
-            # (InfluxDB merges records with identical measurement + tags + timestamp)
+            # Add random microseconds to prevent timestamp collisions: the table
+            # dedups on (ts, vessel), so identical timestamps would overwrite.
             random_microseconds = random.randint(0, 999999)
             local_dt = datetime(d.year, d.month, d.day, hour, minute, 0, random_microseconds, tzinfo=tz)
             timestamp = local_dt.astimezone(timezone.utc)

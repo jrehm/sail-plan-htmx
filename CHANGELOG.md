@@ -23,6 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Unused imports (`Annotated`, `Form`, `Query`)
 
+## [0.11.0] - 2026-11-15
+
+### Changed
+- **Storage moved from InfluxDB to QuestDB** (table `sail_config`, created on
+  startup). Configure with `QUESTDB_URL` (default `http://localhost:9000`); the
+  `INFLUX_*` settings and the `influxdb-client` dependency are gone.
+- Deleting a log entry is now a soft delete (`deleted = true`), because QuestDB
+  has no row `DELETE`. All reads filter deleted rows out.
+- After a save or delete the app waits for QuestDB to apply the WAL write before
+  re-reading, so the UI never shows a stale list.
+- User text (the comment) enters SQL only as a quoted string literal; verified
+  with quotes, backslashes, newlines and `; DROP TABLE` in a comment.
+- Unchanged behaviour: "current config" looks back 30 days, history 7 days.
+
+### Migration
+- The 17 existing entries (2026-07-29 to 2026-09-28) were copied from the InfluxDB
+  `signalk` bucket (1-year retention) into QuestDB on 2026-11-15, verified field by
+  field. QuestDB keeps them indefinitely.
+
 ## [0.10.0] - 2025-01-21
 
 ### Added

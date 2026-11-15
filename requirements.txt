@@ -1,7 +1,6 @@
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 jinja2>=3.1.0
-influxdb-client>=1.36.0
 python-dotenv>=1.0.0
 timezonefinder>=6.0.0
 flatbuffers==25.2.10  # pin required: pip sorts 20181003210633 as "latest" lexicographically
